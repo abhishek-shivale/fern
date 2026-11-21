@@ -372,6 +372,8 @@ fn show(
     std::thread::spawn(move || {
         let mut notification = notify_rust::Notification::new();
         notification.appname("Fern").summary(&title).body(&body).icon("alarm-clock");
+        // Reminders should be heard; "Default" is macOS's alert sound, the other is the freedesktop name.
+        notification.sound_name(if cfg!(target_os = "macos") { "Default" } else { "message-new-instant" });
         // Settings → Notifications → "Constant Reminder": the notification stays until dismissed.
         if constant {
             notification.timeout(notify_rust::Timeout::Never);

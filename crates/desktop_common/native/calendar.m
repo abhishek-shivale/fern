@@ -45,7 +45,7 @@ void fern_calendar_access(void (*completion)(int)) {
             return;
         }
         EKEventStore *store = [[EKEventStore alloc] init];
-        void (^response)(BOOL, NSError *) = ^(BOOL granted, NSError *error) {
+        void (^response)(BOOL, NSError *) = ^(BOOL granted, __unused NSError *error) {
             // Keep the store alive until EventKit completes the request.
             (void)store;
             completion(granted ? 1 : 0);
@@ -341,7 +341,7 @@ void fern_follow_up_configure(const char *done, const char *snooze, const char *
 void fern_follow_up_request(void) {
     @autoreleasepool {
         [notificationCenter requestAuthorizationWithOptions:(UNAuthorizationOptionAlert | UNAuthorizationOptionSound)
-            completionHandler:^(BOOL granted, NSError *error) { fern_follow_up_permissions(); }];
+            completionHandler:^(__unused BOOL granted, __unused NSError *error) { fern_follow_up_permissions(); }];
     }
 }
 

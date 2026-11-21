@@ -4,8 +4,17 @@ Continue from Fern commit `1e48336` or later on `abhishek-shivale/fern` `main`. 
 
 ## Set up an isolated macOS test
 
-1. Build the packaged app with `script/package aarch64-apple-darwin` on Apple Silicon or `script/package x86_64-apple-darwin` on Intel. The script writes a DMG under `dist/`. Use its `Fern.app` for Calendar and notification permissions.
-2. Quit any running Fern instance. Create a temporary profile with `fern_test_data=$(mktemp -d)` and launch the packaged binary with `FERN_DATA_DIR="$fern_test_data" /path/to/Fern.app/Contents/MacOS/fern`. Reuse that directory for restart tests. Use dedicated test calendars and tasks.
+1. Run `script/package aarch64-apple-darwin` on Apple Silicon or `script/package x86_64-apple-darwin` on Intel. The script writes a DMG under `dist/`. Use its `Fern.app` for Calendar and notification permissions. macOS builds use GPUI's runtime shader feature by default. [GPUI shader build](https://github.com/zed-industries/zed/blob/56934ec0560bce8929025497411de7f5322fb6ca/crates/gpui_apple/build.rs)
+2. Quit any running Fern instance. Mount the DMG and copy its `Fern.app` into a fresh writable directory beside a `.portable` marker. Release builds use portable mode for isolation. Run the following from the repository root, replacing the source path with the mounted app's path.
+
+   ```bash
+   fern_test_dir=$(mktemp -d "$PWD/target/fern-calendar-test.XXXXXX") &&
+     ditto "/path/to/mounted/Fern.app" "$fern_test_dir/Fern.app" &&
+     touch "$fern_test_dir/.portable" &&
+     "$fern_test_dir/Fern.app/Contents/MacOS/fern"
+   ```
+
+   In **Settings → Data & Sync**, verify that the data directory is `$fern_test_dir/Data` before connecting accounts. Reuse that app copy and directory for restart tests. Use dedicated test calendars and tasks. [Portable mode](../README.md)
 3. In **Settings → Integrations**, select **Connect Google** if the build has a Desktop OAuth client bundled. Otherwise, import the downloaded Desktop app client JSON using **Choose Google OAuth client file**, then connect. Enable the Google Calendar API in the Google project and add the test account if the project is in Testing mode. For a release build, confirm the repository has `FERN_GOOGLE_OAUTH_CLIENT_JSON` configured. Keep OAuth credentials out of the repository and session transcript. [Build configuration](../README.md)
 4. Connect iCloud in Integrations and grant macOS Calendar access. Enable the same Google account in Apple Calendar, make its dedicated test calendar visible there, and allow Fern notifications for the follow-up tests.
 
@@ -24,7 +33,15 @@ Continue from Fern commit `1e48336` or later on `abhishek-shivale/fern` `main`. 
 
 ## Verification to finish
 
-Linux workspace binary checks and Clippy passed. Focused OAuth, calendar reconciliation, availability, suggestions, and follow-up tests passed. The full Linux test run was interrupted, and the release build and live macOS checks remain unverified.
+Linux workspace binary checks and Clippy passed before this handoff, along with focused OAuth, calendar reconciliation, availability, suggestions, and follow-up tests. The full Linux test run was interrupted.
+
+On Apple Silicon, all 224 `fern_core` tests passed, including calendar reconciliation, cached availability, slot suggestions, and follow-up scheduling. The test binary was compiled directly with `rustc` using the dependencies from the partial Cargo build. The native calendar bridge also compiled and linked against the macOS SDK. An ad hoc signed smoke bundle using the package's `Info.plist` and entitlements resolved the correct bundle identifier and used the adjacent `Data/` profile on two launches.
+
+The original macOS Cargo build stopped because the active Command Line Tools lack `metal`. The desktop manifest now enables runtime shaders on macOS. Full workspace checks and the release build are pending. In the sandbox, a packaging smoke test also stopped at `iconutil` with `Invalid Iconset`, and a standalone `hdiutil create` probe returned `Device not configured`. DMG creation needs verification from a regular macOS session.
+
+All live acceptance checks above remain open. Import, publication, retry, conflict resolution, recurring events, and cross-provider suggestions need the packaged app and dedicated Google and iCloud calendars. Follow-ups need the packaged app and macOS notification permission.
+
+The Google recurring-event parser test passed on macOS. The OAuth loopback test timed out on one run and passed on a diagnostic rerun. Live sign-in remains unverified.
 
 Run the locked checks on the Mac after any fixes.
 
@@ -35,4 +52,4 @@ cargo test --workspace --locked
 cargo build --profile release-fast -p fern_desktop -p fern_server --locked
 ```
 
-Fern currently refreshes bounded date ranges into local SQLite. Confirm whether the spec requires persisted Google incremental sync cursors or whether these local snapshots satisfy the intended first-release behavior. [Google event refresh](../crates/desktop_common/src/calendar_accounts/google.rs)
+The checked-in first-release checks cover bounded refresh and offline availability. Use the SQLite snapshots to verify that behavior. Confirm persisted Google incremental sync cursors separately if another release spec requires them. [Google event refresh](../crates/desktop_common/src/calendar_accounts/google.rs)

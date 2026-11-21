@@ -83,7 +83,7 @@ cargo run --release -p fern_desktop
 You need stable Rust plus each platform's build tools:
 
 - **Linux:** the libraries GPUI uses (Wayland or X11, xkbcommon, Vulkan, fontconfig). On Debian and Ubuntu, `script/linux-deps` installs them.
-- **macOS:** Xcode, because GPUI compiles its Metal shaders with it. The app needs macOS 11 or later.
+- **macOS:** Apple Command Line Tools or Xcode for the macOS SDK and linker. GPUI compiles Metal shaders at runtime. The app needs macOS 11 or later.
 - **Windows:** Visual Studio Build Tools with the "Desktop development with C++" workload.
 
 The first build compiles GPUI straight from the Zed repository, so it takes a while.

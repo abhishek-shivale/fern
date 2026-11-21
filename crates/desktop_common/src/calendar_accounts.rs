@@ -5,6 +5,7 @@ mod google;
 use std::{
     collections::{BTreeSet, HashSet},
     rc::Rc,
+    sync::{Arc, atomic::{AtomicBool, Ordering}},
     time::Duration,
 };
 
@@ -61,6 +62,7 @@ pub fn init(store: Rc<Store>, cx: &mut App) {
             refresh_running: false,
             publish_running: false,
             account_action_running: false,
+            google_sign_in: None,
             action_error: None,
             account_version: 0,
             connection: apple::connection(),
@@ -99,6 +101,8 @@ pub struct Accounts {
     pub refresh_running: bool,
     publish_running: bool,
     pub account_action_running: bool,
+    /// Set while the browser sign-in is open; storing `true` stops it.
+    google_sign_in: Option<Arc<AtomicBool>>,
     pub action_error: Option<String>,
     account_version: u64,
     connection: (bool, bool),
@@ -370,6 +374,12 @@ impl Accounts {
                     return;
                 }
             };
+            let cancel = flow.cancel.clone();
+            this.update(cx, |this, cx| {
+                this.google_sign_in = Some(cancel.clone());
+                cx.notify();
+            })
+            .ok();
             cx.update(|cx| cx.open_url(flow.url.as_str()));
             let (send, receive) = futures::channel::oneshot::channel();
             std::thread::spawn(move || {
@@ -403,11 +413,34 @@ impl Accounts {
                 .await
                 .context("Google sign-in did not finish")
                 .and_then(|result| result);
-            this.update(cx, |this, cx| this.finish_google_action(result, cx))
-                .ok();
+            this.update(cx, |this, cx| {
+                this.google_sign_in = None;
+                if cancel.load(Ordering::Relaxed) {
+                    this.account_action_running = false;
+                    cx.notify();
+                    return;
+                }
+                if result.is_ok() {
+                    // Return from the browser tab to Fern.
+                    cx.activate(true);
+                }
+                this.finish_google_action(result, cx);
+            })
+            .ok();
         })
         .detach();
         cx.notify();
+    }
+
+    pub fn google_signing_in(&self) -> bool {
+        self.google_sign_in.is_some()
+    }
+
+    pub fn cancel_google_sign_in(&mut self, cx: &mut Context<Self>) {
+        if let Some(cancel) = &self.google_sign_in {
+            cancel.store(true, Ordering::Relaxed);
+            cx.notify();
+        }
     }
 
     pub fn disconnect_google(&mut self, cx: &mut Context<Self>) {

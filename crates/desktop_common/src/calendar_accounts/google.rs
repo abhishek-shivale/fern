@@ -2,6 +2,7 @@
 use std::io::{BufRead as _, BufReader, Read as _, Write as _};
 use std::net::{Ipv4Addr, TcpListener};
 use std::path::Path;
+use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result, bail, ensure};
@@ -76,6 +77,8 @@ pub(super) struct Credentials {
 
 pub(super) struct Authorization {
     pub url: Url,
+    /// Set from the UI to stop waiting for the browser.
+    pub cancel: Arc<AtomicBool>,
     client: OAuthClient,
     listener: TcpListener,
     nonce: String,
@@ -116,6 +119,7 @@ impl Authorization {
         }
         Ok(Self {
             url,
+            cancel: Arc::default(),
             client,
             listener,
             nonce,
@@ -157,6 +161,9 @@ impl Authorization {
     fn wait_for_code(&self) -> Result<String> {
         let deadline = Instant::now() + Duration::from_secs(180);
         while Instant::now() < deadline {
+            if self.cancel.load(Ordering::Relaxed) {
+                bail!("Google sign-in was cancelled");
+            }
             let (mut stream, _) = match self.listener.accept() {
                 Ok(peer) => peer,
                 Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {

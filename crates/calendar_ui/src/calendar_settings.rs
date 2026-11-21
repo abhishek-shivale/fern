@@ -312,12 +312,40 @@ impl Render for CalendarSettings {
                     .rounded(px(8.))
                     .bg(colors.surface_background)
                     .children(google_status.map(|email| {
-                        Label::new(email.to_owned())
+                        Label::new(format!("Google · {email}"))
                             .size(LabelSize::Small)
                             .color(Color::Muted)
                     }))
                     .when(running, |el| {
-                        el.child(Label::new(strings.working).color(Color::Muted))
+                        let signing_in = service.google_signing_in();
+                        el.child(
+                            h_flex()
+                                .gap_2()
+                                .flex_wrap()
+                                .child(
+                                    Label::new(if signing_in {
+                                        strings.google_waiting
+                                    } else {
+                                        strings.working
+                                    })
+                                    .color(Color::Muted),
+                                )
+                                .when(signing_in, |el| {
+                                    el.child(
+                                        work_button(
+                                            "cancel-google-sign-in",
+                                            strings.cancel_sign_in,
+                                            false,
+                                            cx,
+                                        )
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.service.update(cx, |service, cx| {
+                                                service.cancel_google_sign_in(cx)
+                                            })
+                                        })),
+                                    )
+                                }),
+                        )
                     })
                     .when(!running, |el| {
                         el.child(

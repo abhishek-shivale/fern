@@ -546,7 +546,11 @@ mod tests {
         let t2145 = NaiveTime::from_hms_opt(21, 45, 0).unwrap();
         assert_eq!(week_axis::time_at_offset(week_axis::offset(t2145)), t2145);
 
-        let (h, m, _delta) = week_axis::hour_in_timezone(d(2026, 10, 18), 12, chrono_tz::UTC);
-        assert!(h < 24 && m == 0);
+        let day = d(2026, 10, 18);
+        let (h, m, delta) = week_axis::hour_in_timezone(day, 12, chrono_tz::UTC);
+        // Expect noon local converted to UTC, whatever this machine's offset (e.g. +05:30).
+        use chrono::TimeZone as _;
+        let utc = chrono::Local.from_local_datetime(&day.and_hms_opt(12, 0, 0).unwrap()).earliest().unwrap().naive_utc();
+        assert_eq!((h, m, delta), (utc.hour(), utc.minute(), (utc.date() - day).num_days() as i8));
     }
 }
