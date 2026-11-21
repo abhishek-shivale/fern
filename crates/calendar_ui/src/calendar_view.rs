@@ -4,7 +4,8 @@
 use std::{collections::{BTreeMap, HashSet}, rc::Rc, time::Duration};
 
 use chrono::{Datelike, Local, NaiveDate, NaiveTime};
-use desktop_common::text_input::{Mode, TextInput};
+use desktop_common::{calendar_accounts, text_input::{Mode, TextInput}};
+use fern_core::calendar_sync::{DateRange, event_key};
 use fern_core::{CalendarOptions, ColorBy, Id, Priority, Store, Task};
 use gpui::{EventEmitter, Focusable, FontWeight};
 use ui::prelude::*;
@@ -17,6 +18,7 @@ use crate::i18n;
 use crate::calendar_options_view::{CalendarOptionsDialog, OptionsEvent, Page};
 use crate::task_detail::{StartFocus, TaskDetail, TaskUpdated};
 use crate::task_rows;
+use crate::work_planner::{ClosePlanner, WorkPlanner, work_button};
 
 #[path = "calendar_task_editor.rs"]
 mod calendar_task_editor;
@@ -91,6 +93,7 @@ pub struct CalendarView {
     /// Open month/year picker popover on the header title, storing the displayed year.
     month_picker_open: Option<i32>,
     task_editor: Option<TaskEditor>,
+    work_planner: Option<gpui::Entity<WorkPlanner>>,
     saved_hint: Option<(String, gpui::Task<()>)>,
     mode_menu_open: bool,
     focus_handle: gpui::FocusHandle,
@@ -325,6 +328,12 @@ impl CalendarView {
                 cx.notify();
             }).detach();
         }
+        if let Some(accounts) = calendar_accounts::accounts(cx) {
+            cx.observe(&accounts, |this, _, cx| {
+                this.year_heatmap.clear();
+                cx.notify();
+            }).detach();
+        }
         cx.subscribe(&detail, |this, _, _: &TaskUpdated, cx| {
             crate::data_version::data_changed(cx.entity_id(), cx);
             this.card_updated(cx);
@@ -355,6 +364,7 @@ impl CalendarView {
             filter: CalendarFilter::default(),
             month_picker_open: None,
             task_editor: None,
+            work_planner: None,
             saved_hint: None,
             mode_menu_open: false,
             focus_handle: cx.focus_handle(),
@@ -429,12 +439,11 @@ impl CalendarView {
 
     /// The subscribed calendars' events covering any day from `from` to `to`.
     fn events_between(&self, from: NaiveDate, to: NaiveDate, cx: &App) -> Vec<EventBar> {
-        let Some(feeds) = crate::subscriptions::feeds(cx) else { return Vec::new() };
         let accent = cx.theme().colors().accent;
-        let mut events: Vec<EventBar> = feeds
-            .read(cx)
-            .occurrences(from, to)
+        let feeds = crate::subscriptions::feeds(cx);
+        let mut events: Vec<EventBar> = feeds.as_ref()
             .into_iter()
+            .flat_map(|feeds| feeds.read(cx).occurrences(from, to))
             .map(|occurrence| EventBar {
                 key: occurrence.event.uid.clone(),
                 subscription_id: occurrence.calendar.id,
@@ -450,6 +459,32 @@ impl CalendarView {
                 color: crate::lists_panel::parse_color(occurrence.calendar.color.as_deref()).unwrap_or(accent),
             })
             .collect();
+        if let Some(accounts) = calendar_accounts::accounts(cx) {
+            let strings = &i18n::t(cx).work;
+            let dates = DateRange { start: from, end: to.succ_opt().unwrap_or(to) };
+            events.extend(accounts.read(cx).displayed_events(dates).into_iter().map(|(source, event)| {
+                let times = event.span.display();
+                let title = if event.title.is_empty() {
+                    if event.busy { strings.busy_event } else { strings.untitled }
+                } else {
+                    &event.title
+                };
+                EventBar {
+                    key: event_key(&source.key, &event.id),
+                    subscription_id: Id::nil(),
+                    writable: false,
+                    title: title.to_owned(),
+                    start: times.start,
+                    end: times.end,
+                    start_time: times.start_time,
+                    end_time: times.end_time,
+                    location: event.location.clone(),
+                    notes: event.notes.clone(),
+                    calendar: format!("{} · {}", source.key.provider.label(), source.name),
+                    color: accent,
+                }
+            }));
+        }
         events.sort_by_key(|event| (event.start_time.is_some(), event.start_time));
         events
     }
@@ -1043,7 +1078,7 @@ impl CalendarView {
         } else if let Some(editor) = &self.task_editor {
             editor.view.update(cx, |editor, cx| editor.dismiss(window, cx));
             true
-        } else if self.options_dialog.take().is_some() {
+        } else if self.options_dialog.take().is_some() || self.work_planner.take().is_some() {
             window.focus(&self.focus_handle, cx);
             cx.notify();
             true
@@ -1954,6 +1989,46 @@ impl CalendarView {
         self.open_event = None;
         self.close_card(cx);
         self.reload(cx);
+    }
+
+    fn external_dates(&self) -> DateRange {
+        let (start, end) = match self.mode {
+            CalendarMode::Month | CalendarMode::MultiWeek(_) => {
+                let weeks = self.month_grid_weeks();
+                (weeks[0][0], weeks[weeks.len() - 1][6])
+            }
+            CalendarMode::Year => {
+                let end = calendar::add_months(self.month, 12);
+                (self.month, end.pred_opt().unwrap_or(end))
+            }
+            CalendarMode::Agenda => {
+                let start = self.agenda_start();
+                (start, start + chrono::Duration::days(AGENDA_DAYS))
+            }
+            _ => {
+                let days = self.shown_days();
+                (days[0], days[days.len() - 1])
+            }
+        };
+        DateRange { start, end: end.succ_opt().unwrap_or(end) }
+    }
+
+    pub fn open_work_planner(&mut self, task: Option<Id>, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(accounts) = calendar_accounts::accounts(cx) else { return };
+        if !self.finish_task_before_navigation(cx) {
+            return;
+        }
+        let day = self.new_task_day(Local::now().date_naive());
+        let store = self.store.clone();
+        self.close_card(cx);
+        let planner = cx.new(|cx| WorkPlanner::new(store, accounts, task, day, cx));
+        cx.subscribe_in(&planner, window, |this, _, _: &ClosePlanner, window, cx| {
+            this.work_planner = None;
+            window.focus(&this.focus_handle, cx);
+            cx.notify();
+        }).detach();
+        self.work_planner = Some(planner);
+        cx.notify();
     }
 
     fn new_task_day(&self, today: NaiveDate) -> NaiveDate {
@@ -3202,6 +3277,12 @@ impl Render for CalendarView {
         let strings = i18n::t(cx);
         let theme = cx.theme().clone();
         let today = Local::now().date_naive();
+        let accounts = calendar_accounts::accounts(cx);
+        let dates = self.external_dates();
+        if let Some(accounts) = &accounts {
+            accounts.update(cx, |accounts, _| accounts.set_visible(dates));
+        }
+        let stale = accounts.as_ref().is_some_and(|accounts| accounts.read(cx).stale(dates));
         let bordered = |id: &'static str| {
             // The original's header buttons: 30 px boxes with text at the body size.
             h_flex()
@@ -3294,6 +3375,17 @@ impl Render for CalendarView {
                         .size(LabelSize::Small)
                         .color(Color::Muted),
                 )
+            })
+            .when(accounts.is_some(), |el| {
+                el.child(work_button("open-work-planner", strings.work.plan, self.work_planner.is_some(), cx)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        if this.work_planner.take().is_some() {
+                            window.focus(&this.focus_handle, cx);
+                            cx.notify();
+                        } else {
+                            this.open_work_planner(this.card.map(|(id, _)| id), window, cx);
+                        }
+                    })))
             })
             .child(
                 bordered("calendar-add-frame").relative().debug_selector(|| "calendar-add-frame".to_owned()).child(
@@ -3479,8 +3571,14 @@ impl Render for CalendarView {
             .child(
                 v_flex().flex_1().min_w_0().h_full()
                     .child(toolbar)
+                    .when(stale, |el| {
+                        el.child(div().px_4().py_1().child(
+                            Label::new(strings.work.stale).size(LabelSize::Small).color(Color::Muted),
+                        ))
+                    })
                     .child(calendar),
             )
+            .children(self.work_planner.clone())
             .children(arrange)
             .children(self.saved_hint.as_ref().map(|(message, _)| {
                 div().absolute().bottom(px(16.)).left_0().right_0().flex().justify_center().px_4()

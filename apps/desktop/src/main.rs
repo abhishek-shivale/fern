@@ -95,6 +95,7 @@ fn main() -> Result<()> {
         eprintln!("failed to back up the data: {err:#}");
     }
 
+    desktop_common::mac_notifications::configure(locale.strings());
     let platform = gpui_platform::current_platform(false);
     let text_system = platform.text_system();
     gpui::Application::with_platform(platform).with_assets(Assets).run(move |cx: &mut App| {
@@ -112,6 +113,7 @@ fn main() -> Result<()> {
         }
         updater::init(store.clone(), cx);
         subscriptions::init(store.clone(), cx);
+        desktop_common::calendar_accounts::init(store.clone(), cx);
 
         let bounds = Bounds::centered(None, size(px(1280.), px(760.)), cx);
         let (titlebar, decorations) = title_bar::window_options();

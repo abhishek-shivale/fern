@@ -115,6 +115,7 @@ pub struct SettingsWindow {
     subscription_discover_error: Option<String>,
     _updates: Option<gpui::Subscription>,
     _feeds: Option<gpui::Subscription>,
+    calendar_settings: Option<Entity<calendar_ui::calendar_settings::CalendarSettings>>,
 }
 
 impl EventEmitter<SettingsEvent> for SettingsWindow {}
@@ -239,6 +240,7 @@ impl SettingsWindow {
             subscription_discover_error: None,
             _updates: updates,
             _feeds: feeds,
+            calendar_settings: calendar_ui::calendar_settings::settings_panel(cx),
         }
     }
 
@@ -1323,10 +1325,11 @@ impl SettingsWindow {
                 )
                 .into_any_element()
         });
-        let mut page = vec![
+        let mut page: Vec<_> = self.calendar_settings.clone().into_iter().map(IntoElement::into_any_element).collect();
+        page.extend([
             div().pb_3().child(Label::new(strings.subscribed_calendars).weight(FontWeight::MEDIUM)).into_any_element(),
             div().pb_2().px_1().text_size(px(12.)).text_color(colors.text_muted).child(strings.subscriptions_hint).into_any_element(),
-        ];
+        ]);
         if !rows.is_empty() {
             page.push(group().children(rows).into_any_element());
         }

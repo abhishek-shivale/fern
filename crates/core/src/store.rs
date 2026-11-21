@@ -884,6 +884,49 @@ const MIGRATIONS: &[&str] = &[
         INSERT INTO sync_log (entity, key, at) VALUES ('matrix_profiles', OLD.id, CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER));
     END;
     ",
+    "
+    CREATE TABLE external_calendars (
+        provider TEXT NOT NULL,
+        account TEXT NOT NULL,
+        calendar TEXT NOT NULL,
+        name TEXT NOT NULL,
+        account_name TEXT NOT NULL,
+        timezone TEXT,
+        writable INTEGER NOT NULL,
+        present INTEGER NOT NULL DEFAULT 1,
+        visible INTEGER NOT NULL DEFAULT 0,
+        busy INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (provider, account, calendar)
+    );
+    CREATE TABLE external_calendar_windows (
+        provider TEXT NOT NULL,
+        account TEXT NOT NULL,
+        calendar TEXT NOT NULL,
+        month TEXT NOT NULL,
+        events TEXT NOT NULL DEFAULT '[]',
+        refreshed_at INTEGER,
+        error TEXT,
+        time_basis TEXT,
+        PRIMARY KEY (provider, account, calendar, month),
+        FOREIGN KEY (provider, account, calendar) REFERENCES external_calendars ON DELETE CASCADE
+    );
+    CREATE TABLE calendar_publications (
+        id TEXT PRIMARY KEY,
+        task_id TEXT UNIQUE,
+        generation INTEGER NOT NULL DEFAULT 0,
+        state TEXT NOT NULL
+    );
+    CREATE TABLE task_follow_ups (
+        task_id TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+        state TEXT NOT NULL
+    );
+    CREATE TRIGGER task_follow_ups_closed
+    AFTER UPDATE OF completed_at, deleted_at, wont_do_at ON tasks
+    WHEN NEW.completed_at IS NOT NULL OR NEW.deleted_at IS NOT NULL OR NEW.wont_do_at IS NOT NULL
+    BEGIN
+        DELETE FROM task_follow_ups WHERE task_id = NEW.id;
+    END;
+    ",
 ];
 
 #[cfg(test)]
@@ -1618,53 +1661,58 @@ impl Store {
                 HashSet::new()
             };
             if let Some(next) = repeat.next_for_with_holidays(due, chrono::Local::now().date_naive(), |d| holidays.contains(&d)) {
-                let tx = self.conn.unchecked_transaction()?;
-                let copy = Uuid::now_v7();
-                tx.execute(
-                    &format!(
-                        "INSERT INTO tasks ({TASK_COLUMNS})
-                         SELECT ?2, parent_id, kind, title, notes, priority, due_date, due_time,
-                                ?3, created_at, list_id, NULL, NULL, NULL, NULL, end_date, end_time, ?3, NULL,
-                                section_id, estimate, NULL, location, timezone, is_floating, NULL, 0
-                         FROM tasks WHERE id = ?1"
-                    ),
-                    params![id.to_string(), copy.to_string(), now_ms()],
-                )?;
-                tx.execute(
-                    "INSERT INTO task_tags (task_id, tag) SELECT ?2, tag FROM task_tags WHERE task_id = ?1",
-                    params![id.to_string(), copy.to_string()],
-                )?;
-                // The completed occurrence owns a snapshot of the checklist. Besides preserving
-                // its history, this lets Undo restore the exact checked state transactionally.
-                let items = {
-                    let mut statement = tx.prepare("SELECT id, title, sort_order, completed_at, created_at FROM checklist_items WHERE task_id = ?1")?;
-                    statement.query_map([id.to_string()], |row| Ok((
-                        row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, i64>(2)?,
-                        row.get::<_, Option<i64>>(3)?, row.get::<_, i64>(4)?,
-                    )))?
-                        .collect::<rusqlite::Result<Vec<_>>>()?
-                };
-                for (source_id, title, order, completed_at, created_at) in items {
-                    let copy_id = Uuid::now_v7().to_string();
-                    tx.execute("INSERT INTO checklist_items (id, task_id, title, sort_order, completed_at, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                        params![copy_id, copy.to_string(), title, order, completed_at, created_at])?;
-                    tx.execute("INSERT INTO repeat_checklist_copies (copy_id, source_id) VALUES (?1, ?2)",
-                        params![copy_id, source_id])?;
-                }
-                // A duration moves with its start.
-                let end = task.end_date.map(|end| (end + (next - due)).format(DATE_FORMAT).to_string());
-                let next_repeat = repeat.forgetting_curve.then(|| repeat.advance().to_string());
-                tx.execute(
-                    "UPDATE tasks SET due_date = ?2, end_date = ?3, snoozed_until = NULL, in_progress_at = NULL,
-                            repeat = COALESCE(?4, repeat) WHERE id = ?1",
-                    params![id.to_string(), next.format(DATE_FORMAT).to_string(), end, next_repeat],
-                )?;
-                tx.execute(
-                    "UPDATE checklist_items SET completed_at = NULL WHERE task_id = ?1",
-                    [id.to_string()],
-                )?;
-                tx.commit()?;
-                return Ok((Some(copy), Vec::new()));
+                return self.in_tx(|| {
+                    let tx = &self.conn;
+                    let copy = Uuid::now_v7();
+                    tx.execute(
+                        &format!(
+                            "INSERT INTO tasks ({TASK_COLUMNS})
+                             SELECT ?2, parent_id, kind, title, notes, priority, due_date, due_time,
+                                    ?3, created_at, list_id, NULL, NULL, NULL, NULL, end_date, end_time, ?3, NULL,
+                                    section_id, estimate, NULL, location, timezone, is_floating, NULL, 0
+                             FROM tasks WHERE id = ?1"
+                        ),
+                        params![id.to_string(), copy.to_string(), now_ms()],
+                    )?;
+                    tx.execute(
+                        "INSERT INTO task_tags (task_id, tag) SELECT ?2, tag FROM task_tags WHERE task_id = ?1",
+                        params![id.to_string(), copy.to_string()],
+                    )?;
+                    // The completed occurrence owns a snapshot of the checklist. Besides preserving
+                    // its history, this lets Undo restore the exact checked state transactionally.
+                    let items = {
+                        let mut statement = tx.prepare("SELECT id, title, sort_order, completed_at, created_at FROM checklist_items WHERE task_id = ?1")?;
+                        statement.query_map([id.to_string()], |row| Ok((
+                            row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, i64>(2)?,
+                            row.get::<_, Option<i64>>(3)?, row.get::<_, i64>(4)?,
+                        )))?
+                            .collect::<rusqlite::Result<Vec<_>>>()?
+                    };
+                    for (source_id, title, order, completed_at, created_at) in items {
+                        let copy_id = Uuid::now_v7().to_string();
+                        tx.execute("INSERT INTO checklist_items (id, task_id, title, sort_order, completed_at, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                            params![copy_id, copy.to_string(), title, order, completed_at, created_at])?;
+                        tx.execute("INSERT INTO repeat_checklist_copies (copy_id, source_id) VALUES (?1, ?2)",
+                            params![copy_id, source_id])?;
+                    }
+                    // Keep the published block with its completed occurrence.
+                    tx.execute("UPDATE calendar_publications SET task_id = ?2, generation = generation + 1 WHERE task_id = ?1",
+                        params![id.to_string(), copy.to_string()])?;
+                    tx.execute("DELETE FROM task_follow_ups WHERE task_id = ?1", [id.to_string()])?;
+                    // A duration moves with its start.
+                    let end = task.end_date.map(|end| (end + (next - due)).format(DATE_FORMAT).to_string());
+                    let next_repeat = repeat.forgetting_curve.then(|| repeat.advance().to_string());
+                    tx.execute(
+                        "UPDATE tasks SET due_date = ?2, end_date = ?3, snoozed_until = NULL, in_progress_at = NULL,
+                                repeat = COALESCE(?4, repeat) WHERE id = ?1",
+                        params![id.to_string(), next.format(DATE_FORMAT).to_string(), end, next_repeat],
+                    )?;
+                    tx.execute(
+                        "UPDATE checklist_items SET completed_at = NULL WHERE task_id = ?1",
+                        [id.to_string()],
+                    )?;
+                    Ok((Some(copy), Vec::new()))
+                });
             }
         }
         if completed {
@@ -1758,6 +1806,13 @@ impl Store {
              WHERE original.id = mapping.source_id AND original.task_id = ?1 AND copied.task_id = ?2",
             params![id.to_string(), copy.to_string()],
         )?;
+        tx.execute(
+            "UPDATE calendar_publications SET task_id = NULL, generation = generation + 1
+             WHERE task_id = ?1 AND EXISTS (SELECT 1 FROM calendar_publications WHERE task_id = ?2)",
+            params![id.to_string(), copy.to_string()],
+        )?;
+        tx.execute("UPDATE calendar_publications SET task_id = ?1, generation = generation + 1 WHERE task_id = ?2",
+            params![id.to_string(), copy.to_string()])?;
         tx.execute("DELETE FROM tasks WHERE id = ?1", [copy.to_string()])?;
         tx.execute(
             "UPDATE tasks SET due_date = ?2, end_date = ?3, repeat = COALESCE(?4, repeat) WHERE id = ?1",
@@ -1882,7 +1937,7 @@ impl Store {
                 id.to_string(),
                 date.format(DATE_FORMAT).to_string(),
                 end.map(|date| date.format(DATE_FORMAT).to_string()),
-                end.and(task.end_time).map(|time| time.format(TIME_FORMAT).to_string()),
+                task.due_date.and(task.end_time).map(|time| time.format(TIME_FORMAT).to_string()),
             ],
         )?;
         Ok(())

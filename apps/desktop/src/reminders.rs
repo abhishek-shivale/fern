@@ -458,6 +458,9 @@ pub fn start(store: Rc<Store>, window: AnyWindowHandle, cx: &mut Context<AppView
     if std::env::var_os("FERN_DEV_STATE").is_some() {
         return;
     }
+    if cfg!(target_os = "macos") {
+        start_follow_ups(store.clone(), window, cx);
+    }
     cx.spawn(async move |this, cx| {
         let now = Local::now().naive_local();
         let checked_at = store
@@ -550,6 +553,63 @@ pub fn start(store: Rc<Store>, window: AnyWindowHandle, cx: &mut Context<AppView
         }
     })
     .detach();
+}
+
+fn start_follow_ups(store: Rc<Store>, window: AnyWindowHandle, cx: &mut Context<AppView>) {
+    use desktop_common::mac_notifications::{self, Interaction};
+    use fern_core::follow_up::FollowUpAction;
+
+    cx.spawn(async move |this, cx| {
+        loop {
+            let now = chrono::Utc::now().timestamp_millis();
+            let result = (|| -> anyhow::Result<()> {
+                for reply in mac_notifications::replies()? {
+                    let (open, changed) = match reply.interaction {
+                        Interaction::Open => (
+                            store.active_follow_up_notices()?.contains(&(reply.task, reply.notice)), false,
+                        ),
+                        Interaction::Action(action) => {
+                            let accepted = store.act_on_follow_up(reply.task, reply.notice, action, now)?;
+                            (accepted && matches!(action, FollowUpAction::Reschedule),
+                             accepted && matches!(action, FollowUpAction::Done))
+                        }
+                    };
+                    let reschedule = matches!(reply.interaction, Interaction::Action(FollowUpAction::Reschedule));
+                    if open || changed {
+                        cx.update(|cx| {
+                            window.update(cx, |_, window, cx| {
+                                this.update(cx, |app, cx| {
+                                    if changed {
+                                        app.follow_up_completed(cx);
+                                    }
+                                    if open {
+                                        app.open_follow_up(reply.task, reschedule, window, cx);
+                                    }
+                                }).ok();
+                            }).ok()
+                        });
+                    }
+                }
+                mac_notifications::poll_permission();
+                let enabled = store.preferences()?.notifications.desktop && mac_notifications::permission() == 1;
+                let notices = store.follow_up_tick(now, enabled)?;
+                let valid = if enabled { store.active_follow_up_notices()? } else { Vec::new() };
+                mac_notifications::prune(&valid)?;
+                let body = cx.update(|cx| i18n::t(cx).work.follow_body);
+                for notice in notices {
+                    mac_notifications::show(&notice, body);
+                }
+                Ok(())
+            })();
+            if let Err(error) = result {
+                eprintln!("Could not process work-block follow-ups: {error:#}");
+            }
+            if this.read_with(cx, |_, _| ()).is_err() {
+                break;
+            }
+            cx.background_executor().timer(Duration::from_secs(3)).await;
+        }
+    }).detach();
 }
 
 #[cfg(test)]

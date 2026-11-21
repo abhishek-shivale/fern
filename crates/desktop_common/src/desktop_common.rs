@@ -1,5 +1,7 @@
 pub mod actions;
 pub mod calendar;
+pub mod calendar_accounts;
+pub mod mac_notifications;
 pub mod colors;
 pub mod completion_mark;
 pub mod countdown_helpers;

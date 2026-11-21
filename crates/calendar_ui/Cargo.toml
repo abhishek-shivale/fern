@@ -11,6 +11,7 @@ workspace = true
 path = "src/calendar_ui.rs"
 
 [dependencies]
+anyhow.workspace = true
 chrono.workspace = true
 chrono-tz.workspace = true
 desktop_common.workspace = true

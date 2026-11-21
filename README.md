@@ -144,6 +144,36 @@ one, use Settings → About → Import Backups.
 **Coming from TickTick?** Generate a backup in TickTick's settings, which gives you a `.csv` file. Then
 import it in Fern with Settings → About → Import Backups.
 
+**Google Calendar and iCloud on macOS.** Open Settings → Integrations in the packaged
+Fern app and select **Connect Google** to authorize access in your browser.
+Connect iCloud through macOS Calendar permissions.
+
+To configure a macOS release, enable the Google Calendar API and create a
+[Desktop app OAuth client](https://developers.google.com/identity/protocols/oauth2/native-app).
+Provide its downloaded JSON as the `FERN_GOOGLE_OAUTH_CLIENT_JSON` repository secret for
+the release workflow or as a build-time environment variable for a local package. This
+embeds the Desktop app client in the binary. Builds without a bundled client can import
+the JSON under Integrations. If the Google project is in Testing mode, add your Google
+account as a test user.
+
+On recent macOS versions, EventKit requires Full Access to read events. Fern reads the
+selected iCloud calendars and sends published events to Google.
+
+- Choose **Show events** and **Count as busy** independently for each calendar. Fern keeps the
+  last refresh on disk so Calendar and task planning work offline. Stale availability is shown
+  as unknown.
+- To publish, authorize Google publishing and pick one writable Google calendar. In Calendar →
+  **Plan work block**, choose a task, preview a time, then use **Schedule and publish**.
+  Enable that Google account in Apple Calendar to see the same event there.
+- Review external changes in **Google publications** in Integrations. You can accept Google's
+  time, restore Fern's time, or unlink the event. If the event was deleted, recreating it
+  requires a separate choice.
+- The work-block planner can suggest times before a deadline from your working hours and the
+  next 30 days of calendar availability. Set a one-time or repeating follow-up there and allow
+  macOS notifications. An unfinished task can be completed, snoozed for a chosen number of
+  minutes, or rescheduled from its notification. Fern catches up one overdue nudge per task
+  when it next runs.
+
 **Sync between your devices** is optional. It works through a server you run yourself:
 
 ```bash

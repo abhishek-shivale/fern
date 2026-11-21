@@ -68,6 +68,8 @@ jobs:
           fi
 
       - name: Build
+        env:
+          FERN_GOOGLE_OAUTH_CLIENT_JSON: ${{ runner.os == 'macOS' && secrets.FERN_GOOGLE_OAUTH_CLIENT_JSON || '' }}
         run: cargo build --release --locked --target ${{ matrix.target }} -p fern_desktop -p fern_server
 
       # Windows: SignPath signs the programs with an Authenticode certificate.

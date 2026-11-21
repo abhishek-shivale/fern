@@ -1,4 +1,6 @@
 pub mod calendar_options_view;
+pub mod calendar_settings;
+mod work_planner;
 pub mod calendar_view;
 
 pub use calendar_view::*;

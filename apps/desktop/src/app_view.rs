@@ -937,6 +937,22 @@ impl AppView {
         }
     }
 
+    pub fn open_follow_up(&mut self, task: fern_core::Id, reschedule: bool, window: &mut Window, cx: &mut Context<Self>) {
+        window.activate_window();
+        if reschedule {
+            if self.select(Section::Calendar, window, cx) {
+                self.calendar.update(cx, |calendar, cx| calendar.open_work_planner(Some(task), window, cx));
+            }
+        } else {
+            self.open_task(task, window, cx);
+        }
+    }
+
+    pub fn follow_up_completed(&mut self, cx: &mut Context<Self>) {
+        self.reload_all(cx);
+        desktop_common::data_version::data_changed(cx.entity_id(), cx);
+    }
+
     fn toggle_shortcuts(&mut self, cx: &mut Context<Self>) {
         self.shortcuts_open = !self.shortcuts_open;
         if !self.shortcuts_open {

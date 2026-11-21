@@ -12,7 +12,7 @@ use rusqlite::types::{Value, ValueRef};
 use rusqlite::{OptionalExtension as _, params_from_iter};
 use serde_json::{Map, Value as Json};
 
-use crate::store::Store;
+use crate::{Id, store::Store};
 
 /// The sync server stores an attachment key as one file-name component.
 pub const MAX_FILE_KEY_BYTES: usize = 255;
@@ -305,6 +305,12 @@ impl Store {
         let mut ordered: Vec<&Change> = changes.iter().collect();
         let rank = |entity: &str| SYNCED.iter().position(|(name, _)| *name == entity).unwrap_or(usize::MAX);
         ordered.sort_by_key(|change| (change.row.is_none(), rank(&change.entity)));
+        let track_work_blocks: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM calendar_publications) OR EXISTS(SELECT 1 FROM task_follow_ups)",
+            [], |row| row.get(0),
+        )?;
+        let mut previous_blocks = Vec::new();
+        let mut changed_tasks = Vec::new();
         let mut applied = 0;
         for change in ordered {
             let keys = keys_of(&change.entity)?;
@@ -318,6 +324,17 @@ impl Store {
                 .flatten();
             if local.is_some_and(|at| at > change.at) {
                 continue;
+            }
+            if track_work_blocks && change.entity == "tasks" && let Ok(id) = change.key.parse::<Id>() {
+                changed_tasks.push(id);
+                let tracked: bool = tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM calendar_publications WHERE task_id = ?1)
+                         OR EXISTS(SELECT 1 FROM task_follow_ups WHERE task_id = ?1)",
+                    [&change.key], |row| row.get(0),
+                )?;
+                if tracked && let Some(task) = self.task(id)? {
+                    previous_blocks.push(task);
+                }
             }
             let parts: Vec<&str> = change.key.split(KEY_SEPARATOR).collect();
             match &change.row {
@@ -352,6 +369,9 @@ impl Store {
                 }
             }
             applied += 1;
+        }
+        if !previous_blocks.is_empty() {
+            self.rebind_synced_calendar_blocks(&previous_blocks, &changed_tasks)?;
         }
         tx.execute_batch("DELETE FROM sync_applying;")?;
         tx.commit()?;

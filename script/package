@@ -79,6 +79,8 @@ case "$os" in
     <key>LSMinimumSystemVersion</key><string>11.0</string>
     <key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>
     <key>NSHighResolutionCapable</key><true/>
+    <key>NSCalendarsUsageDescription</key><string>Fern reads selected iCloud calendars to display events and check availability.</string>
+    <key>NSCalendarsFullAccessUsageDescription</key><string>Fern reads selected iCloud calendars to display events and check availability.</string>
     <key>NSHumanReadableCopyright</key><string>Fern contributors, AGPL-3.0-or-later</string>
     <key>CFBundleURLTypes</key>
     <array>
@@ -92,10 +94,10 @@ case "$os" in
 EOF
         if [ -n "${APPLE_SIGNING_IDENTITY:-}" ]; then
             # Notarization wants the hardened runtime and a secure timestamp.
-            codesign --force --options runtime --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$work/Fern.app"
+            codesign --force --options runtime --timestamp --entitlements script/macos-entitlements.plist --sign "$APPLE_SIGNING_IDENTITY" "$work/Fern.app"
         else
             # An ad-hoc signature: without one Apple Silicon refuses to run the app at all.
-            codesign --force --deep --sign - "$work/Fern.app"
+            codesign --force --deep --entitlements script/macos-entitlements.plist --sign - "$work/Fern.app"
         fi
         mkdir -p "$work/dmg"
         mv "$work/Fern.app" "$work/dmg/"
